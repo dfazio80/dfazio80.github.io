@@ -1,0 +1,27 @@
+body {
+    background: lightyellow;
+    font: 18px Arial, sans-serif;
+}
+code {
+	font-family: Consolas,"courier new";
+	color: green;
+	background-color: black;
+	padding: 2px;	
+}
+
+table, th, td {
+    border: 1px solid black;
+    padding: 10px;
+}
+
+footer {
+	text-align: center;
+	padding: 1px;
+	background-color: DarkGreen;
+	color: white;
+}
+
+h1 {
+	color: Orange;
+	text-align: center;
+}

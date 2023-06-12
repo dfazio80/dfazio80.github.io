@@ -1,0 +1,198 @@
+<!DOCTYPE html>
+<html lang="es-ar">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width" />
+    <title>Apache Kafka y NonStop</title>
+	<link rel="stylesheet" href="css/styles.css">
+  </head>
+  <body>
+    <h1>Instalación y configuración de Apache Kafka para recibir mensajes de Nonstop</h1>	
+	<p>La infraestructura resultante se detalla en el siguiente esquema:</p>
+	<img src="images/infrakafka.png" alt="Infraestructura de Kafka" />
+	<p>En los equipos Linux trabajados no se tuvo accesos a repositorios de internet o internos, por lo que se hace todo a mano mediante paquetes, según corresponda la distribución (RedHat 8 en este caso)</p>
+    
+	<hr>
+	
+	<h2>Instalación de JAVA:</h2>
+	<p>Instalarlo en los dos equipos con root:<br><code>rpm -ivh jre-8u333-linux-x64.rpm</code></p>
+	
+	<hr>
+	
+	<h2>Instalación de Apache Kafka:</h2>
+	
+	<h3>Paso 1: Instalar el paquete .tgz</h3>
+	<p>Seguir los pasos de la <a href="https://kafka.apache.org/quickstart">Quickstart</a><br>Se instaló en: /opt/kafka</p>
+
+	<h3>Paso 2: Configurar zookeeper y kafka como servicio en SystemD</h3>
+	<p><code>systemctl start kafka<br>systemctl restart kafka<br>systemctl status kafka</code></p>
+	<p>Las configuraciones quedan en<br>/etc/systemd/system/zookeeper.service<br>/etc/systemd/system/kafka.service</p>
+	<p>Arranque automático al iniciar el servidor:<br><code>systemctl enable zookeeper<br>systemctl enable kafka</code></p>
+
+	<h3>Paso 3: Creación del topic ALTL</h3>
+	<p><code>./kafka-topics.sh --create --topic altl --bootstrap-server localhost:9092 --partitions 1 --replication-factor 1</code></p>
+
+	<h3>Paso 4: Configuración SSL</h3>
+	<p>Certificados y configs en: /opt/kafka/ssl<br>
+
+	A) Generando la CA<br>
+	<code>openssl req -new -newkey rsa:4096 -days 1825 -x509 -subj "/CN=Kafka-Security-CA" -keyout ca-key -out ca-cert -nodes</code><br>
+	<br>
+	B) Creando la keystore<br>
+	<code>export SRVPASS=serversecret<br>
+	keytool -genkey -keystore kafka.server.keystore.jks -validity 1825 -storepass $SRVPASS -keypass $SRVPASS -dname "CN=Server1" -ext SAN=IP:X.X.X.X -storetype pkcs12 -keyalg RSA</code><br>
+	Para verificar:<br>
+	<code>keytool -list -v -keystore kafka.server.keystore.jks</code><br>
+	<br>
+	C) Firmando el certificado con la CA del paso 1<br>
+	<code>keytool -keystore kafka.server.keystore.jks -certreq -file cert-file -storepass $SRVPASS -keypass $SRVPASS<br>
+	openssl x509 -req -CA ca-cert -CAkey ca-key -in cert-file -out cert-signed -days 1825 -CAcreateserial -passin pass:$SRVPASS</code><br>
+	<br>
+	D) Importo la CA en la truststore<br>
+	<code>keytool -keystore kafka.server.truststore.jks -alias CARoot -import -file ca-cert -storepass $SRVPASS -keypass $SRVPASS -noprompt</code><br>
+	<br>
+	E) Importar certificado firmado y CA en la keystore<br>
+	<code>keytool -keystore kafka.server.keystore.jks -alias CARoot -import -file ca-cert -storepass $SRVPASS -keypass $SRVPASS -noprompt<br>
+	keytool -keystore kafka.server.keystore.jks -import -file cert-signed -storepass $SRVPASS -keypass $SRVPASS -noprompt</code><br>
+	<br>
+	F) Generar truststore para el cliente:<br>
+	El siguiente truststore es necesario para iniciar una conexión desde un consumidor/productor. Y va a ser usado por kadeck:<br> 
+	<code>export CLIPASS=clientpass<br>
+	keytool -keystore kafka.client.truststore.jks -alias CARoot -import -file ca-cert -storepass $CLIPASS -keypass $CLIPASS -noprompt</code><br>
+	<br>
+	G) Como método de pruebas, se pueden iniciar productores y consumidores de línea de comando apuntando a la config SSL:<br>
+	<code>./kafka-console-producer.sh --bootstrap-server Server1:9093 --topic altl --producer.config /opt/kafka/sslclient/client.properties<br>
+	./kafka-console-consumer.sh --bootstrap-server Server1:9093 --topic altl --consumer.config /opt/kafka/sslclient/client.properties</code><br>
+	</p>
+	
+	<h3>Paso 5: Configuración general de Kafka:</h3>
+	<p>/opt/kafka/config/server.properties<br>
+	Se configura el puerto 9093 y los certificados para la conexión SSL<br>
+	<table>
+	<tr><td>
+	listeners=PLAINTEXT://:9092,SSL://:9093<br>
+	advertised.listeners=PLAINTEXT://LNK5120:9092,SSL://LNK5120:9093<br>
+	ssl.keystore.location=/opt/kafka/ssl/kafka.server.keystore.jks<br>
+	ssl.keystore.password=serversecret<br>
+	ssl.key.password=serversecret<br>
+	ssl.truststore.location=/opt/kafka/ssl/kafka.server.truststore.jks<br>
+	ssl.truststore.password=serversecret<br>
+	## Se modificó ubicación de los logs:<br>
+	log.dirs=/kafka/kafka-logs<br>
+	## Se modificó la retención de logs a 15 días:<br>
+	log.retention.hours=360<br>
+	</td></tr>
+	</table>
+	<br>
+	</p>
+	<hr>
+	
+	<h2>Ulinga for Kafka:</h2>
+	<p>
+	Subvol de instalación: $DATA12.ULINGA<br>
+	Obey de arranque: GOULK<br>
+	<br>
+	Para configuración de SSL: una vez iniciada la conexión, el archivo UNKNCRTS contiene el certificado del Server1, esta cadena de texto completa debe ser copiada al final del archivo ROOTCRTS para que reconozca el certificado y establezca la conexión SSL correctamente.
+	</p>
+	<br>
+
+	<hr>
+	
+	<h2>Kadeck:</h2>
+	
+	<p> <a href="https://support.xeotek.com/hc/en-us">Manuales de instalación y soporte<a> </p>
+	
+	<h3>Paso 1: Docker</h3>
+	<p>Se instaló Docker (necesario para instalar/ejecutar Kadeck) en el equipo Server2 (SO: Red Hat 8)<br>
+	Comandos que se usaron para instalar los paquetes (se usaron paquetes de CentOS 8.0):<br>
+	<br>
+	<code>
+	yum erase buildah<br>
+	yum install docker-ce-cli-20.10.17-3.el8.x86_64.rpm<br>
+	yum install containerd.io-1.6.6-3.1.el8.x86_64.rpm --allowerasing<br>
+	yum install libcgroup-0.41-19.el8.x86_64.rpm<br>
+	yum install docker-ce-rootless-extras-20.10.17-3.el8.x86_64.rpm docker-ce-20.10.17-3.el8.x86_64.rpm<br>
+	yum install docker-compose-plugin-2.6.0-3.el8.x86_64.rpm<br>
+	</code>
+	<br>
+	<strong>IMPORTANTE:</strong><br>
+	Docker inicia una interfaz ethernet virtual (docker0) que funciona de bridging para los contenedores. La IP que viene por defecto entra en conflicto con la del servidor y al iniciar el daemon se pierde la conexión por SSH. Se debe cambiar la IP de la siguiente manera:<br>
+	Modificar el archivo /lib/systemd/system/docker.service en la línea que comienza con ExecStart agregar al final --bip "192.168.1.1/24". En Server2 quedó de la siguiente manera:<br>
+	<table>
+	<tr><td>
+	ExecStart=/usr/bin/dockerd -H fd:// --containerd=/run/containerd/containerd.sock --bip "192.168.1.1/24"<br>
+	</td></tr>
+	</table>	
+	<br>
+	Comandos para systemd (Daemon):<br>
+	<code>
+	systemctl start docker<br>
+	systemctl restart docker<br>
+	systemctl status docker<br>
+	</code>
+	<br>
+	Arranque automático al iniciar el servidor:<br>
+	<code>
+	systemctl enable docker<br>
+	systemctl enable containerd<br>
+	</code>
+	</p>
+	
+	<h3>Paso 2: PostgreSQL</h3>
+	<p>
+	Kadeck almacena información en una base de datos (PostgreSQL) externa, para ello se instaló el motor de BD y se inicializó una BD para el producto, de la siguiente manera:<br>
+	Instalación:<br>
+	<code>
+	dnf install -y postgresql14-libs-14.4-1PGDG.rhel8.x86_64.rpm<br>
+	dnf install -y lz4-1.8.3-3.el8_4.x86_64.rpm<br>
+	dnf install -y postgresql14-14.4-1PGDG.rhel8.x86_64.rpm<br>
+	dnf install -y postgresql14-server-14.4-1PGDG.rhel8.x86_64.rpm<br>
+	</code>
+	<br>
+	Config inicial y seteo de servicio:<br>
+	<code>
+	/usr/pgsql-14/bin/postgresql-14-setup initdb<br>
+	systemctl enable postgresql-14<br>
+	systemctl start postgresql-14<br>
+	</code>
+	<br>
+	Seteo de usuario root para la BD:<br>
+	<code>sudo -u postgres createuser root</code><br>
+	En psql:<br>
+	<code>ALTER USER root WITH PASSWORD 'root';</code><br>
+	<br>
+	Creación de la base de datos:<br>
+	<code>createdb kadeckweb</code><br>
+	La base de datos se almacena en el siguiente directorio: /var/lib/pgsql/14/data (puede visualizarse con psql -c "show data_directory;")<br>
+	</p>
+	
+	<h3>Paso 3: Kadeck</h3>
+	<p>
+	A) Instalación:<br>
+	Se baja la imagen desde un Linux con acceso a internet con el siguiente comando:<br>
+	<code>docker run -d -p 34500:34500 --name=kadeckweb --network=host -e xeotek_kadeck_secret=<i>enviado_por_el_proveedor</i> -e xeotek_kadeck_teamid=<i>enviado_por_el_proveedor</i> -e xeotek_kadeck_port=34500 --rm xeotek/kadeckweb:3.2.2</code><br>
+	
+	Se creó un tar de la imagen:<br>
+	<code>docker save xeotek/kadeckweb:3.2.3 > kadeckweb.tar</code><br>
+	Se copió al destino (Server2) y se cargó en el repositorio de Docker<br>
+	<code>docker load < kadeckweb.tar</code><br>
+	<br>
+	B) Inicio de la aplicación:<br>
+	En el directorio /opt/kadeck se encuentan los siguientes archivos:<br>
+	kafka.client.truststore.jks: truststore cliente que se generó en el paso 3.D) de instalación de Kafka<br>
+	runkadeck.sh: script de arranque de kadeck (contiene toda la config necesaria como puertos, certificados, base de datos, etc.)<br>
+	<br>
+	C) Conexión a Kafka SSL:<br>
+	
+	<img src="images/broker_config.png" alt="Configuración del broker" />
+	<br>
+	<ul>
+	<li>Bootstrap servers: la IP/DNS del bróker de kafka y puerto 9093 (SSL)</li><br>
+	<li>Security protocol: SSL</li><br>
+	<li>Trustore location: el archivo truststore cliente. Previamente agregado al filesystem interno de docker (ver runkadeck.sh)</li><br>
+	<li>Truststore password: la contraseña del archivo de claves, generado en el paso 3.D) de instalación de Kafka</li><br>
+	</ul>	
+	</p>
+	
+  </body>
+</html>
